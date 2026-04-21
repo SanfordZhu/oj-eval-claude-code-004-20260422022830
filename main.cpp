@@ -47,6 +47,7 @@ map<string, string> selectedBooks; // userID -> selected ISBN
 // File names for persistence
 const string USER_FILE = "users.dat";
 const string BOOK_FILE = "books.dat";
+const string FINANCE_FILE = "finance.dat";
 
 // Function declarations
 void initializeSystem();
@@ -105,6 +106,13 @@ void initializeSystem() {
         // First run - create root user
         users.push_back(User(ROOT_USERNAME, ROOT_PASSWORD, "superadmin", ROOT_PRIVILEGE));
         saveData();
+
+        // Create empty finance file
+        ofstream financeFile(FINANCE_FILE, ios::binary);
+        if (financeFile) {
+            size_t recordCount = 0;
+            financeFile.write(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount));
+        }
     }
 }
 
@@ -804,6 +812,36 @@ void executeShow(const vector<string>& tokens) {
     }
 }
 
+void addFinanceRecord(double income, double expenditure) {
+    // Read current records
+    vector<pair<double, double>> records;
+    ifstream financeFile(FINANCE_FILE, ios::binary);
+    if (financeFile) {
+        size_t recordCount;
+        financeFile.read(reinterpret_cast<char*>(&recordCount), sizeof(recordCount));
+        for (size_t i = 0; i < recordCount; i++) {
+            double inc, exp;
+            financeFile.read(reinterpret_cast<char*>(&inc), sizeof(inc));
+            financeFile.read(reinterpret_cast<char*>(&exp), sizeof(exp));
+            records.push_back({inc, exp});
+        }
+    }
+
+    // Add new record
+    records.push_back({income, expenditure});
+
+    // Write back
+    ofstream financeFileOut(FINANCE_FILE, ios::binary);
+    if (financeFileOut) {
+        size_t recordCount = records.size();
+        financeFileOut.write(reinterpret_cast<const char*>(&recordCount), sizeof(recordCount));
+        for (const auto& record : records) {
+            financeFileOut.write(reinterpret_cast<const char*>(&record.first), sizeof(record.first));
+            financeFileOut.write(reinterpret_cast<const char*>(&record.second), sizeof(record.second));
+        }
+    }
+}
+
 void executeBuy(const vector<string>& tokens) {
     // buy [ISBN] [Quantity]
     if (tokens.size() != 3) {
@@ -843,6 +881,9 @@ void executeBuy(const vector<string>& tokens) {
     // Update stock and calculate total
     book->stockQuantity -= quantity;
     double total = book->price * quantity;
+
+    // Record income
+    addFinanceRecord(total, 0.0);
 
     cout << fixed << setprecision(2) << total << "\n";
 }
@@ -1085,6 +1126,9 @@ void executeImport(const vector<string>& tokens) {
     // Update stock
     book->stockQuantity += quantity;
 
+    // Record expenditure
+    addFinanceRecord(0.0, totalCost);
+
     cout << "\n"; // Successful import outputs empty line
 }
 
@@ -1096,9 +1140,55 @@ void executeShowFinance(const vector<string>& tokens) {
         return;
     }
 
-    // TODO: Implement finance tracking
-    // For now, just output empty implementation
-    cout << "+ 0.00 - 0.00\n";
+    int count = -1; // -1 means all records
+    if (tokens.size() == 3) {
+        // show finance [Count]
+        string countStr = tokens[2];
+        if (!isValidQuantity(countStr)) {
+            cout << "Invalid\n";
+            return;
+        }
+        count = stoi(countStr);
+        if (count == 0) {
+            cout << "\n"; // Empty line when Count is 0
+            return;
+        }
+    } else if (tokens.size() != 2) {
+        cout << "Invalid\n";
+        return;
+    }
+
+    // Read finance records
+    ifstream financeFile(FINANCE_FILE, ios::binary);
+    if (!financeFile) {
+        // No finance records yet
+        cout << "+ 0.00 - 0.00\n";
+        return;
+    }
+
+    size_t recordCount;
+    financeFile.read(reinterpret_cast<char*>(&recordCount), sizeof(recordCount));
+
+    if (count > 0 && count > static_cast<int>(recordCount)) {
+        cout << "Invalid\n";
+        return;
+    }
+
+    double totalIncome = 0.0, totalExpenditure = 0.0;
+    int recordsToRead = (count == -1) ? recordCount : min(count, static_cast<int>(recordCount));
+
+    // Skip to the last 'recordsToRead' records
+    financeFile.seekg(sizeof(size_t) + (recordCount - recordsToRead) * (sizeof(double) * 2), ios::beg);
+
+    for (int i = 0; i < recordsToRead; i++) {
+        double income, expenditure;
+        financeFile.read(reinterpret_cast<char*>(&income), sizeof(income));
+        financeFile.read(reinterpret_cast<char*>(&expenditure), sizeof(expenditure));
+        totalIncome += income;
+        totalExpenditure += expenditure;
+    }
+
+    cout << fixed << setprecision(2) << "+ " << totalIncome << " - " << totalExpenditure << "\n";
 }
 
 void executeLog() {
